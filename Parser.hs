@@ -17,9 +17,11 @@ data Tok
   | TGt
   deriving (Eq, Show)
 
+-- Convierte cadena a minusculas
 lower :: String -> String
 lower = map toLower
 
+-- Parsea una cadena SQL a una consulta
 parseSql :: String -> Either DbError SqlQuery
 parseSql s =
   case tokenize (trim s) of
@@ -30,6 +32,7 @@ parseSql s =
         Right (q, rest) ->
           if null rest then Right q else Left . SyntaxError $ "Tokens sobrantes: " ++ show rest
 
+-- Elimina espacios en blanco al inicio y final
 trim :: String -> String
 trim = f . f
   where
@@ -63,11 +66,13 @@ tokenize s =
             | otherwise ->
                 Left . SyntaxError $ "Carácter inesperado: " ++ [c]
   where
+    -- Parsea literales de cadena
     stringLit t =
       case break (== '"') t of
         (inside, '"' : rest) -> (TString inside :) <$> tokenize rest
         _ -> Left $ SyntaxError "Cadena sin cerrar con \""
 
+-- Parsea una declaración SQL
 parseStatement :: [Tok] -> Either DbError (SqlQuery, [Tok])
 parseStatement [] = Left $ SyntaxError "Entrada vacía"
 parseStatement (TWord w : ts)
@@ -77,6 +82,7 @@ parseStatement (TWord w : ts)
   | lower w == "select" = parseSelect ts
 parseStatement ts = Left . SyntaxError $ "Se esperaba CREATE, INSERT, DELETE o SELECT, obtuve: " ++ show (take 5 ts)
 
+-- Parsea CREATE TABLE
 parseCreate :: [Tok] -> Either DbError (SqlQuery, [Tok])
 parseCreate (TWord w : ts)
   | lower w == "table" =
@@ -89,6 +95,7 @@ parseCreate (TWord w : ts)
         _ -> Left $ SyntaxError "CREATE TABLE: se esperaba nombre e ("
 parseCreate _ = Left $ SyntaxError "CREATE TABLE: falta TABLE"
 
+-- Parsea lista de identificadores separados por coma
 parseIdentsComma :: [Tok] -> Either DbError ([String], [Tok])
 parseIdentsComma (TWord c : TComma : ts) = do
   (cs, rest) <- parseIdentsComma ts
@@ -96,6 +103,7 @@ parseIdentsComma (TWord c : TComma : ts) = do
 parseIdentsComma (TWord c : ts) = Right ([c], ts)
 parseIdentsComma ts = Left $ SyntaxError $ "Lista de columnas inválida cerca de: " ++ show (take 8 ts)
 
+-- Parsea INSERT
 parseInsert :: [Tok] -> Either DbError (SqlQuery, [Tok])
 parseInsert (TWord w : ts)
   | lower w == "into" =
@@ -112,6 +120,7 @@ parseInsert (TWord w : ts)
         _ -> Left $ SyntaxError "INSERT: se esperaba INTO nombre VALUES"
 parseInsert _ = Left $ SyntaxError "INSERT: falta INTO"
 
+-- Parsea lista de valores
 parseValues :: [Tok] -> Either DbError ([Value], [Tok])
 parseValues ts = do
   (v, ts1) <- oneValue ts
@@ -121,6 +130,7 @@ parseValues ts = do
       Right (v : vs, rest)
     _ -> Right ([v], ts1)
 
+-- Parsea un valor individual
 oneValue :: [Tok] -> Either DbError (Value, [Tok])
 oneValue (TInt n : ts) = Right (VInt n, ts)
 oneValue (TString s : ts) = Right (VString s, ts)
@@ -128,6 +138,7 @@ oneValue (TWord w : ts)
   | lower w == "null" = Right (VNull, ts)
 oneValue ts = Left $ SyntaxError $ "Valor inválido en VALUES: " ++ show (take 6 ts)
 
+-- Parsea DELETE
 parseDelete :: [Tok] -> Either DbError (SqlQuery, [Tok])
 parseDelete (TWord w : ts)
   | lower w == "from" =
@@ -138,6 +149,7 @@ parseDelete (TWord w : ts)
         _ -> Left $ SyntaxError "DELETE: falta nombre de tabla"
 parseDelete _ = Left $ SyntaxError "DELETE: falta FROM"
 
+-- Parsea SELECT
 parseSelect :: [Tok] -> Either DbError (SqlQuery, [Tok])
 parseSelect ts0 = do
   (mcols, ts1) <- parseCols ts0
@@ -148,12 +160,14 @@ parseSelect ts0 = do
           Right (Select mcols tName mw, rest')
     _ -> Left $ SyntaxError "SELECT: se esperaba FROM tabla"
 
+-- Parsea columnas en SELECT
 parseCols :: [Tok] -> Either DbError (Maybe [String], [Tok])
 parseCols (TStar : ts) = Right (Nothing, ts)
 parseCols ts = do
   (ids, rest) <- parseIdentsComma ts
   Right (Just ids, rest)
 
+-- Parsea WHERE opcional
 parseOptWhere :: [Tok] -> Either DbError (Maybe WhereExpr, [Tok])
 parseOptWhere [] = Right (Nothing, [])
 parseOptWhere (TWord w : ts)
@@ -162,9 +176,11 @@ parseOptWhere (TWord w : ts)
       Right (Just e, rest)
 parseOptWhere ts = Right (Nothing, ts)
 
+-- Parsea expresión WHERE
 parseExpr :: [Tok] -> Either DbError (WhereExpr, [Tok])
 parseExpr = parseOr
 
+-- Parsea OR
 parseOr :: [Tok] -> Either DbError (WhereExpr, [Tok])
 parseOr ts = do
   (e1, ts1) <- parseAnd ts
@@ -175,6 +191,7 @@ parseOr ts = do
           Right (WOr e1 e2, ts2)
     _ -> Right (e1, ts1)
 
+-- Parsea AND
 parseAnd :: [Tok] -> Either DbError (WhereExpr, [Tok])
 parseAnd ts = do
   (e1, ts1) <- parseAtom ts
@@ -185,6 +202,7 @@ parseAnd ts = do
           Right (WAnd e1 e2, ts2)
     _ -> Right (e1, ts1)
 
+-- Parsea comparacion o parentesis
 parseAtom :: [Tok] -> Either DbError (WhereExpr, [Tok])
 parseAtom (TLParen : ts) = do
   (e, ts1) <- parseExpr ts
@@ -202,6 +220,7 @@ parseAtom (TWord col : ts) = do
   Right (WCompare col op v, rest')
 parseAtom ts = Left $ SyntaxError $ "WHERE: átomo inválido: " ++ show (take 6 ts)
 
+-- Parsea comparación
 parseLiteral :: [Tok] -> Either DbError (Value, [Tok])
 parseLiteral (TInt n : rest) = Right (VInt n, rest)
 parseLiteral (TString s : rest) = Right (VString s, rest)
