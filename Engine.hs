@@ -4,15 +4,16 @@ import Data.List (elemIndex, intercalate)
 
 import Types
 
+-- Busca una tabla en la base de datos
 lookupTable :: TableName -> Database -> Maybe Table
 lookupTable tableName (Database tablesList) = lookup tableName tablesList
 
--- Guarda la tabla con ese nombre. Si ya habia una, la reemplaza
+-- Inserta o actualiza una tabla en la base de datos
 insertTable :: TableName -> Table -> Database -> Database
 insertTable tableName table (Database tablesList) =
   Database ((tableName, table) : filter ((/= tableName) . fst) tablesList)
 
--- Sabe que numero de columna es y lee ese valor en la fila (mismo orden que el esquema)
+-- Obtiene el valor de una columna en una fila
 rowValue :: Table -> ColumnName -> Row -> Maybe Value
 rowValue table columnName rowValues = do
   columnIndex <- elemIndex columnName (tableColumns table)
@@ -29,6 +30,7 @@ runQuery sqlQuery database = case sqlQuery of
     runSelect maybeSelectedColumns name maybeWhereClause database
   Delete name maybeWhereClause -> runDelete name maybeWhereClause database
 
+-- Ejecuta CREATE TABLE
 runCreate :: TableName -> [ColumnName] -> Database -> Either DbError (Database, Maybe String)
 runCreate tableName columnNames database =
   case lookupTable tableName database of
@@ -38,6 +40,7 @@ runCreate tableName columnNames database =
           updatedDatabase = insertTable tableName newTable database
        in Right (updatedDatabase, Just $ "Tabla '" ++ tableName ++ "' creada.")
 
+-- Ejecuta INSERT
 runInsert :: TableName -> [Value] -> Database -> Either DbError (Database, Maybe String)
 runInsert tableName rowValues database =
   case lookupTable tableName database of
@@ -52,7 +55,7 @@ runInsert tableName rowValues database =
                   updatedDatabase = insertTable tableName updatedTable database
                in Right (updatedDatabase, Just $ "1 fila insertada en '" ++ tableName ++ "'.")
 
--- Select: la base no cambia. Solo escoge filas y arma el texto a mostrar
+-- Corre un select y devuelve el resultado
 runSelect ::
   Maybe [ColumnName] ->
   TableName ->
@@ -95,13 +98,13 @@ runDelete tableName maybeWhereClause database =
                   ++ "'."
             )
 
--- Sin where, cualquier fila pasa. Con where, mira si cumple la condicion
+-- Verifica si una fila cumple con la condición WHERE
 matchWhere :: Maybe WhereExpr -> Table -> Row -> Bool
 matchWhere Nothing _ _ = True
 matchWhere (Just whereExpression) table rowValues =
   evalWhere table whereExpression rowValues
 
--- Where: comparar columna con valor, "and" de dos partes, "or" de dos partes
+-- Evalua una expresión WHERE
 evalWhere :: Table -> WhereExpr -> Row -> Bool
 evalWhere table (WCompare columnName comparisonOperator literalValue) rowValues =
   case rowValue table columnName rowValues of
@@ -115,7 +118,7 @@ evalWhere table (WOr leftSubexpression rightSubexpression) rowValues =
   evalWhere table leftSubexpression rowValues
     || evalWhere table rightSubexpression rowValues
 
--- Esta funcion toma el operador del WHERE (=, <, >) y lo aplica entre el valor de la celda y el valor literal 
+--  Compara dos valores según el operador 
 applyComparison :: CmpOp -> Value -> Value -> Bool
 applyComparison CmpEq leftValue rightValue = leftValue == rightValue
 applyComparison CmpLt leftValue rightValue = compareValues leftValue rightValue == LT
@@ -129,7 +132,7 @@ compareValues _ VNull = GT
 compareValues (VInt _) (VString _) = LT
 compareValues (VString _) (VInt _) = GT
 
--- Texto del select: titulos y luego cada fila
+-- Formatea el resultado de SELECT como string
 formatSelectResult :: Table -> [ColumnName] -> [Row] -> String
 formatSelectResult table columnNames rows =
   let headerLine = intercalate " | " columnNames

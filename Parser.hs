@@ -33,6 +33,7 @@ parseSql inputText =
             then Right parsedQuery
             else Left . SyntaxError $ "Tokens sobrantes: " ++ show remainingTokens
 
+-- Elimina espacios en blanco al inicio y final
 trimWhitespace :: String -> String
 trimWhitespace = trimOnce . trimOnce
   where
@@ -86,6 +87,7 @@ parseStatement tokens =
   Left . SyntaxError $
     "Se esperaba CREATE, INSERT, DELETE o SELECT, obtuve: " ++ show (take 5 tokens)
 
+-- Parsea CREATE TABLE
 parseCreate :: [Tok] -> Either DbError (SqlQuery, [Tok])
 parseCreate (TWord keyword : remainingTokens)
   | toLowerString keyword == "table" =
@@ -99,7 +101,7 @@ parseCreate (TWord keyword : remainingTokens)
         _ -> Left $ SyntaxError "CREATE TABLE: se esperaba nombre e ("
 parseCreate _ = Left $ SyntaxError "CREATE TABLE: falta TABLE"
 
--- Nombres separados por coma. Cuando no hay coma, termina la lista
+-- Parsea lista de identificadores separados por coma
 parseIdentsComma :: [Tok] -> Either DbError ([String], [Tok])
 parseIdentsComma (TWord columnName : TComma : remainingTokens) = do
   (restColumnNames, afterList) <- parseIdentsComma remainingTokens
@@ -109,6 +111,7 @@ parseIdentsComma tokens =
   Left . SyntaxError $
     "Lista de columnas inválida cerca de: " ++ show (take 8 tokens)
 
+-- Parsea INSERT
 parseInsert :: [Tok] -> Either DbError (SqlQuery, [Tok])
 parseInsert (TWord keyword : remainingTokens)
   | toLowerString keyword == "into" =
@@ -126,7 +129,7 @@ parseInsert (TWord keyword : remainingTokens)
         _ -> Left $ SyntaxError "INSERT: se esperaba INTO nombre VALUES"
 parseInsert _ = Left $ SyntaxError "INSERT: falta INTO"
 
--- Lista de valores dentro del parentesis, uno tras otro separados por coma
+-- Parsea lista de valores
 parseValues :: [Tok] -> Either DbError ([Value], [Tok])
 parseValues tokens = do
   (firstValue, tokensAfterFirst) <- oneValue tokens
@@ -136,6 +139,7 @@ parseValues tokens = do
       Right (firstValue : restValues, finalTokens)
     _ -> Right ([firstValue], tokensAfterFirst)
 
+-- Parsea un valor individual
 oneValue :: [Tok] -> Either DbError (Value, [Tok])
 oneValue (TInt intValue : remainingTokens) = Right (VInt intValue, remainingTokens)
 oneValue (TString stringValue : remainingTokens) = Right (VString stringValue, remainingTokens)
@@ -144,6 +148,7 @@ oneValue (TWord word : remainingTokens)
 oneValue tokens =
   Left . SyntaxError $ "Valor inválido en VALUES: " ++ show (take 6 tokens)
 
+-- Parsea DELETE
 parseDelete :: [Tok] -> Either DbError (SqlQuery, [Tok])
 parseDelete (TWord keyword : remainingTokens)
   | toLowerString keyword == "from" =
@@ -154,6 +159,7 @@ parseDelete (TWord keyword : remainingTokens)
         _ -> Left $ SyntaxError "DELETE: falta nombre de tabla"
 parseDelete _ = Left $ SyntaxError "DELETE: falta FROM"
 
+-- Parsea SELECT
 parseSelect :: [Tok] -> Either DbError (SqlQuery, [Tok])
 parseSelect tokensAfterSelect = do
   (maybeSelectedColumns, tokensAfterColumns) <- parseCols tokensAfterSelect
@@ -167,12 +173,14 @@ parseSelect tokensAfterSelect = do
             )
     _ -> Left $ SyntaxError "SELECT: se esperaba FROM tabla"
 
+-- Parsea columnas en SELECT
 parseCols :: [Tok] -> Either DbError (Maybe [String], [Tok])
 parseCols (TStar : remainingTokens) = Right (Nothing, remainingTokens)
 parseCols tokens = do
   (identifiers, afterIdentifiers) <- parseIdentsComma tokens
   Right (Just identifiers, afterIdentifiers)
 
+-- Parsea WHERE opcional
 parseOptWhere :: [Tok] -> Either DbError (Maybe WhereExpr, [Tok])
 parseOptWhere [] = Right (Nothing, [])
 parseOptWhere (TWord keyword : remainingTokens)

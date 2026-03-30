@@ -4,16 +4,17 @@ import Engine
 import Parser
 import Types
 
--- Parsea la linea y si sale bien la corre sobre la base
+-- Parsea y ejecuta una linea SQL en la base de datos
 executeLine :: String -> Database -> Either DbError (Database, Maybe String)
 executeLine lineText database = parseSql lineText >>= (`runQuery` database)
 
--- Si hay mensaje, lo imprime
+-- Imprime el resultado de una ejecucion
 printOutput :: (Database, Maybe String) -> IO Database
 printOutput databaseAndMessage =
   (maybe (pure ()) putStrLn . snd) databaseAndMessage
     >> pure (fst databaseAndMessage)
 
+-- Maneja el resultado de una ejecucion, imprimiendo errores o salidas
 handleResult :: Either DbError (Database, Maybe String) -> IO (Maybe Database)
 handleResult =
   either

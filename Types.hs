@@ -1,5 +1,6 @@
 module Types where
 
+-- Tipos de valores en la base de datos: entero, stringo nulo
 data Value
   = VInt Int
   | VString String
@@ -11,20 +12,26 @@ instance Show Value where
   show (VString s) = show s
   show VNull = "NULL"
 
+-- Alias para nombres de columnas y tablas
 type ColumnName = String
 type TableName = String
+-- Una fila es una lista de valores
 type Row = [Value]
 
+-- Estructura de una tabla con columnas y filas
 data Table = Table
   { tableColumns :: [ColumnName]
   , tableRows :: [Row]
   }
 
+-- Base de datos como mapa de nombres a tablas
 newtype Database = Database [(TableName, Table)]
 
+-- Base de datos vacía
 emptyDatabase :: Database
 emptyDatabase = Database []
 
+-- Consultas SQL soportadas
 data SqlQuery
   = CreateTable TableName [ColumnName]
   | Insert TableName [Value]
@@ -32,15 +39,18 @@ data SqlQuery
   | Delete TableName (Maybe WhereExpr)
   deriving (Eq, Show)
 
+-- Expresiones WHERE para filtros
 data WhereExpr
   = WCompare ColumnName CmpOp Value
   | WAnd WhereExpr WhereExpr
   | WOr WhereExpr WhereExpr
   deriving (Eq, Show)
 
+-- Operadores de comparación
 data CmpOp = CmpEq | CmpLt | CmpGt
   deriving (Eq, Show)
 
+-- Errores posibles en la base de datos
 data DbError
   = UnknownTable TableName
   | UnknownColumn ColumnName
