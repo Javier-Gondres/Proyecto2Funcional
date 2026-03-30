@@ -17,194 +17,220 @@ data Tok
   | TGt
   deriving (Eq, Show)
 
-lower :: String -> String
-lower = map toLower
+toLowerString :: String -> String
+toLowerString = map toLower
 
+-- Lee el texto, lo parte en tokens y arma el comando. Si sobra basura al final, tira un error.
 parseSql :: String -> Either DbError SqlQuery
-parseSql s =
-  case tokenize (trim s) of
-    Left e -> Left e
-    Right ts ->
-      case parseStatement ts of
-        Left e -> Left e
-        Right (q, rest) ->
-          if null rest then Right q else Left . SyntaxError $ "Tokens sobrantes: " ++ show rest
+parseSql inputText =
+  case tokenize (trimWhitespace inputText) of
+    Left dbError -> Left dbError
+    Right tokens ->
+      case parseStatement tokens of
+        Left dbError -> Left dbError
+        Right (parsedQuery, remainingTokens) ->
+          if null remainingTokens
+            then Right parsedQuery
+            else Left . SyntaxError $ "Tokens sobrantes: " ++ show remainingTokens
 
-trim :: String -> String
-trim = f . f
+trimWhitespace :: String -> String
+trimWhitespace = trimOnce . trimOnce
   where
-    f = reverse . dropWhile isSpace . reverse . dropWhile isSpace
+    trimOnce = reverse . dropWhile isSpace . reverse . dropWhile isSpace
 
+-- Convierte el string en una lista de tokens (numeros, palabras, simbolos, comillas)
 tokenize :: String -> Either DbError [Tok]
 tokenize [] = Right []
-tokenize s =
-  let s' = dropWhile isSpace s
-   in if null s'
+tokenize inputText =
+  let trimmedInput = dropWhile isSpace inputText
+   in if null trimmedInput
         then Right []
-        else case s' of
+        else case trimmedInput of
           [] -> Right []
-          ',' : rest -> (TComma :) <$> tokenize rest
-          '(' : rest -> (TLParen :) <$> tokenize rest
-          ')' : rest -> (TRParen :) <$> tokenize rest
-          '*' : rest -> (TStar :) <$> tokenize rest
-          '=' : rest -> (TEq :) <$> tokenize rest
-          '<' : rest -> (TLt :) <$> tokenize rest
-          '>' : rest -> (TGt :) <$> tokenize rest
-          '"' : rest -> stringLit rest
-          c : rest
-            | isDigit c ->
-                let (ds, rest') = span isDigit (c : rest)
-                 in case reads ds of
-                      [(n, "")] -> (TInt n :) <$> tokenize rest'
-                      _ -> Left $ SyntaxError $ "Número inválido: " ++ ds
-            | isLetter c || c == '_' ->
-                let (w, rest') = span (\x -> isAlphaNum x || x == '_') (c : rest)
-                 in (TWord w :) <$> tokenize rest'
+          ',' : restOfInput -> (TComma :) <$> tokenize restOfInput
+          '(' : restOfInput -> (TLParen :) <$> tokenize restOfInput
+          ')' : restOfInput -> (TRParen :) <$> tokenize restOfInput
+          '*' : restOfInput -> (TStar :) <$> tokenize restOfInput
+          '=' : restOfInput -> (TEq :) <$> tokenize restOfInput
+          '<' : restOfInput -> (TLt :) <$> tokenize restOfInput
+          '>' : restOfInput -> (TGt :) <$> tokenize restOfInput
+          '"' : restOfInput -> parseStringLiteral restOfInput
+          character : restOfInput
+            | isDigit character ->
+                let (digitRun, afterDigits) = span isDigit (character : restOfInput)
+                 in case reads digitRun of
+                      [(parsedInt, "")] -> (TInt parsedInt :) <$> tokenize afterDigits
+                      _ -> Left $ SyntaxError $ "Número inválido: " ++ digitRun
+            | isLetter character || character == '_' ->
+                let (identifier, afterIdentifier) =
+                      span (\ch -> isAlphaNum ch || ch == '_') (character : restOfInput)
+                 in (TWord identifier :) <$> tokenize afterIdentifier
             | otherwise ->
-                Left . SyntaxError $ "Carácter inesperado: " ++ [c]
+                Left . SyntaxError $ "Carácter inesperado: " ++ [character]
   where
-    stringLit t =
-      case break (== '"') t of
-        (inside, '"' : rest) -> (TString inside :) <$> tokenize rest
+    parseStringLiteral textAfterQuote =
+      case break (== '"') textAfterQuote of
+        (stringContents, '"' : restAfterClosingQuote) ->
+          (TString stringContents :) <$> tokenize restAfterClosingQuote
         _ -> Left $ SyntaxError "Cadena sin cerrar con \""
 
+-- Primera palabra dice si es create/insert/delete/select. Devuelve lo que sobra.
 parseStatement :: [Tok] -> Either DbError (SqlQuery, [Tok])
 parseStatement [] = Left $ SyntaxError "Entrada vacía"
-parseStatement (TWord w : ts)
-  | lower w == "create" = parseCreate ts
-  | lower w == "insert" = parseInsert ts
-  | lower w == "delete" = parseDelete ts
-  | lower w == "select" = parseSelect ts
-parseStatement ts = Left . SyntaxError $ "Se esperaba CREATE, INSERT, DELETE o SELECT, obtuve: " ++ show (take 5 ts)
+parseStatement (TWord firstWord : remainingTokens)
+  | toLowerString firstWord == "create" = parseCreate remainingTokens
+  | toLowerString firstWord == "insert" = parseInsert remainingTokens
+  | toLowerString firstWord == "delete" = parseDelete remainingTokens
+  | toLowerString firstWord == "select" = parseSelect remainingTokens
+parseStatement tokens =
+  Left . SyntaxError $
+    "Se esperaba CREATE, INSERT, DELETE o SELECT, obtuve: " ++ show (take 5 tokens)
 
 parseCreate :: [Tok] -> Either DbError (SqlQuery, [Tok])
-parseCreate (TWord w : ts)
-  | lower w == "table" =
-      case ts of
-        (TWord tName : TLParen : ts') -> do
-          (cols, rest) <- parseIdentsComma ts'
-          case rest of
-            TRParen : rest' -> Right (CreateTable tName cols, rest')
+parseCreate (TWord keyword : remainingTokens)
+  | toLowerString keyword == "table" =
+      case remainingTokens of
+        (TWord tableName : TLParen : tokensInsideParens) -> do
+          (columnNames, afterColumns) <- parseIdentsComma tokensInsideParens
+          case afterColumns of
+            TRParen : afterClosingParen ->
+              Right (CreateTable tableName columnNames, afterClosingParen)
             _ -> Left $ SyntaxError "Falta ) en CREATE TABLE"
         _ -> Left $ SyntaxError "CREATE TABLE: se esperaba nombre e ("
 parseCreate _ = Left $ SyntaxError "CREATE TABLE: falta TABLE"
 
+-- Nombres separados por coma. Cuando no hay coma, termina la lista
 parseIdentsComma :: [Tok] -> Either DbError ([String], [Tok])
-parseIdentsComma (TWord c : TComma : ts) = do
-  (cs, rest) <- parseIdentsComma ts
-  Right (c : cs, rest)
-parseIdentsComma (TWord c : ts) = Right ([c], ts)
-parseIdentsComma ts = Left $ SyntaxError $ "Lista de columnas inválida cerca de: " ++ show (take 8 ts)
+parseIdentsComma (TWord columnName : TComma : remainingTokens) = do
+  (restColumnNames, afterList) <- parseIdentsComma remainingTokens
+  Right (columnName : restColumnNames, afterList)
+parseIdentsComma (TWord columnName : remainingTokens) = Right ([columnName], remainingTokens)
+parseIdentsComma tokens =
+  Left . SyntaxError $
+    "Lista de columnas inválida cerca de: " ++ show (take 8 tokens)
 
 parseInsert :: [Tok] -> Either DbError (SqlQuery, [Tok])
-parseInsert (TWord w : ts)
-  | lower w == "into" =
-      case ts of
-        (TWord tName : TWord v : ts')
-          | lower v == "values" ->
-              case ts' of
-                TLParen : ts'' -> do
-                  (vals, rest) <- parseValues ts''
-                  case rest of
-                    TRParen : rest' -> Right (Insert tName vals, rest')
+parseInsert (TWord keyword : remainingTokens)
+  | toLowerString keyword == "into" =
+      case remainingTokens of
+        (TWord tableName : TWord nextWord : afterTable)
+          | toLowerString nextWord == "values" ->
+              case afterTable of
+                TLParen : tokensInsideParens -> do
+                  (insertedValues, afterValues) <- parseValues tokensInsideParens
+                  case afterValues of
+                    TRParen : afterClosingParen ->
+                      Right (Insert tableName insertedValues, afterClosingParen)
                     _ -> Left $ SyntaxError "Falta ) en INSERT"
                 _ -> Left $ SyntaxError "INSERT: se esperaba ( después de VALUES"
         _ -> Left $ SyntaxError "INSERT: se esperaba INTO nombre VALUES"
 parseInsert _ = Left $ SyntaxError "INSERT: falta INTO"
 
+-- Lista de valores dentro del parentesis, uno tras otro separados por coma
 parseValues :: [Tok] -> Either DbError ([Value], [Tok])
-parseValues ts = do
-  (v, ts1) <- oneValue ts
-  case ts1 of
-    TComma : ts2 -> do
-      (vs, rest) <- parseValues ts2
-      Right (v : vs, rest)
-    _ -> Right ([v], ts1)
+parseValues tokens = do
+  (firstValue, tokensAfterFirst) <- oneValue tokens
+  case tokensAfterFirst of
+    TComma : tokensAfterComma -> do
+      (restValues, finalTokens) <- parseValues tokensAfterComma
+      Right (firstValue : restValues, finalTokens)
+    _ -> Right ([firstValue], tokensAfterFirst)
 
 oneValue :: [Tok] -> Either DbError (Value, [Tok])
-oneValue (TInt n : ts) = Right (VInt n, ts)
-oneValue (TString s : ts) = Right (VString s, ts)
-oneValue (TWord w : ts)
-  | lower w == "null" = Right (VNull, ts)
-oneValue ts = Left $ SyntaxError $ "Valor inválido en VALUES: " ++ show (take 6 ts)
+oneValue (TInt intValue : remainingTokens) = Right (VInt intValue, remainingTokens)
+oneValue (TString stringValue : remainingTokens) = Right (VString stringValue, remainingTokens)
+oneValue (TWord word : remainingTokens)
+  | toLowerString word == "null" = Right (VNull, remainingTokens)
+oneValue tokens =
+  Left . SyntaxError $ "Valor inválido en VALUES: " ++ show (take 6 tokens)
 
 parseDelete :: [Tok] -> Either DbError (SqlQuery, [Tok])
-parseDelete (TWord w : ts)
-  | lower w == "from" =
-      case ts of
-        (TWord tName : rest) -> do
-          (mw, rest') <- parseOptWhere rest
-          Right (Delete tName mw, rest')
+parseDelete (TWord keyword : remainingTokens)
+  | toLowerString keyword == "from" =
+      case remainingTokens of
+        (TWord tableName : afterTableName) -> do
+          (maybeWhereExpression, afterWhere) <- parseOptWhere afterTableName
+          Right (Delete tableName maybeWhereExpression, afterWhere)
         _ -> Left $ SyntaxError "DELETE: falta nombre de tabla"
 parseDelete _ = Left $ SyntaxError "DELETE: falta FROM"
 
 parseSelect :: [Tok] -> Either DbError (SqlQuery, [Tok])
-parseSelect ts0 = do
-  (mcols, ts1) <- parseCols ts0
-  case ts1 of
-    (TWord w : TWord tName : rest)
-      | lower w == "from" -> do
-          (mw, rest') <- parseOptWhere rest
-          Right (Select mcols tName mw, rest')
+parseSelect tokensAfterSelect = do
+  (maybeSelectedColumns, tokensAfterColumns) <- parseCols tokensAfterSelect
+  case tokensAfterColumns of
+    (TWord fromKeyword : TWord tableName : afterFrom)
+      | toLowerString fromKeyword == "from" -> do
+          (maybeWhereExpression, afterWhere) <- parseOptWhere afterFrom
+          Right
+            ( Select maybeSelectedColumns tableName maybeWhereExpression
+            , afterWhere
+            )
     _ -> Left $ SyntaxError "SELECT: se esperaba FROM tabla"
 
 parseCols :: [Tok] -> Either DbError (Maybe [String], [Tok])
-parseCols (TStar : ts) = Right (Nothing, ts)
-parseCols ts = do
-  (ids, rest) <- parseIdentsComma ts
-  Right (Just ids, rest)
+parseCols (TStar : remainingTokens) = Right (Nothing, remainingTokens)
+parseCols tokens = do
+  (identifiers, afterIdentifiers) <- parseIdentsComma tokens
+  Right (Just identifiers, afterIdentifiers)
 
 parseOptWhere :: [Tok] -> Either DbError (Maybe WhereExpr, [Tok])
 parseOptWhere [] = Right (Nothing, [])
-parseOptWhere (TWord w : ts)
-  | lower w == "where" = do
-      (e, rest) <- parseExpr ts
-      Right (Just e, rest)
-parseOptWhere ts = Right (Nothing, ts)
+parseOptWhere (TWord keyword : remainingTokens)
+  | toLowerString keyword == "where" = do
+      (whereExpression, afterExpression) <- parseExpr remainingTokens
+      Right (Just whereExpression, afterExpression)
+parseOptWhere remainingTokens = Right (Nothing, remainingTokens)
 
+-- En el WHERE, AND se resuelve primero y OR despues.
 parseExpr :: [Tok] -> Either DbError (WhereExpr, [Tok])
 parseExpr = parseOr
 
+-- Lee una condicion; si aparece OR, une con otra condicion.
 parseOr :: [Tok] -> Either DbError (WhereExpr, [Tok])
-parseOr ts = do
-  (e1, ts1) <- parseAnd ts
-  case ts1 of
-    (TWord w : rest)
-      | lower w == "or" -> do
-          (e2, ts2) <- parseOr rest
-          Right (WOr e1 e2, ts2)
-    _ -> Right (e1, ts1)
+parseOr tokens = do
+  (leftExpression, tokensAfterLeft) <- parseAnd tokens
+  case tokensAfterLeft of
+    (TWord orKeyword : restAfterOr)
+      | toLowerString orKeyword == "or" -> do
+          (rightExpression, tokensAfterRight) <- parseOr restAfterOr
+          Right (WOr leftExpression rightExpression, tokensAfterRight)
+    _ -> Right (leftExpression, tokensAfterLeft)
 
+-- Lee una condicion; si aparece AND, une con otra condicion.
 parseAnd :: [Tok] -> Either DbError (WhereExpr, [Tok])
-parseAnd ts = do
-  (e1, ts1) <- parseAtom ts
-  case ts1 of
-    (TWord w : rest)
-      | lower w == "and" -> do
-          (e2, ts2) <- parseAnd rest
-          Right (WAnd e1 e2, ts2)
-    _ -> Right (e1, ts1)
+parseAnd tokens = do
+  (leftExpression, tokensAfterLeft) <- parseAtom tokens
+  case tokensAfterLeft of
+    (TWord andKeyword : restAfterAnd)
+      | toLowerString andKeyword == "and" -> do
+          (rightExpression, tokensAfterRight) <- parseAnd restAfterAnd
+          Right (WAnd leftExpression rightExpression, tokensAfterRight)
+    _ -> Right (leftExpression, tokensAfterLeft)
 
+-- Lee una expresion o una comparacion y devuelve esa parte junto con los tokens que faltan por procesar.
 parseAtom :: [Tok] -> Either DbError (WhereExpr, [Tok])
-parseAtom (TLParen : ts) = do
-  (e, ts1) <- parseExpr ts
-  case ts1 of
-    TRParen : rest -> Right (e, rest)
+parseAtom (TLParen : remainingTokens) = do
+  (innerExpression, tokensAfterInner) <- parseExpr remainingTokens
+  case tokensAfterInner of
+    TRParen : afterClosingParen -> Right (innerExpression, afterClosingParen)
     _ -> Left $ SyntaxError "Falta ) en expresión WHERE"
-parseAtom (TWord col : ts) = do
-  (op, rest) <-
-    case ts of
-      TEq : r -> Right (CmpEq, r)
-      TLt : r -> Right (CmpLt, r)
-      TGt : r -> Right (CmpGt, r)
+parseAtom (TWord columnName : remainingTokens) = do
+  (comparisonOperator, tokensAfterOperator) <-
+    case remainingTokens of
+      TEq : rest -> Right (CmpEq, rest)
+      TLt : rest -> Right (CmpLt, rest)
+      TGt : rest -> Right (CmpGt, rest)
       _ -> Left $ SyntaxError "Se esperaba =, < o > después de columna"
-  (v, rest') <- parseLiteral rest
-  Right (WCompare col op v, rest')
-parseAtom ts = Left $ SyntaxError $ "WHERE: átomo inválido: " ++ show (take 6 ts)
+  (literalValue, tokensAfterLiteral) <- parseLiteral tokensAfterOperator
+  Right (WCompare columnName comparisonOperator literalValue, tokensAfterLiteral)
+parseAtom tokens =
+  Left . SyntaxError $ "WHERE: átomo inválido: " ++ show (take 6 tokens)
 
+-- Convierte un token a un valor para comparaciones del WHERE.
 parseLiteral :: [Tok] -> Either DbError (Value, [Tok])
-parseLiteral (TInt n : rest) = Right (VInt n, rest)
-parseLiteral (TString s : rest) = Right (VString s, rest)
-parseLiteral (TWord w : rest)
-  | lower w == "null" = Right (VNull, rest)
+parseLiteral (TInt intValue : remainingTokens) = Right (VInt intValue, remainingTokens)
+parseLiteral (TString stringValue : remainingTokens) =
+  Right (VString stringValue, remainingTokens)
+parseLiteral (TWord word : remainingTokens)
+  | toLowerString word == "null" = Right (VNull, remainingTokens)
 parseLiteral _ = Left $ SyntaxError "Literal inválido en comparación"

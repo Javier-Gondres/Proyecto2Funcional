@@ -4,27 +4,46 @@ import Engine
 import Parser
 import Types
 
--- | Parseo + ejecución pura (sin IO).
+-- Parsea la linea y si sale bien la corre sobre la base
 executeLine :: String -> Database -> Either DbError (Database, Maybe String)
-executeLine line db = parseSql line >>= (`runQuery` db)
+executeLine lineText database = parseSql lineText >>= (`runQuery` database)
 
--- | Imprime el mensaje opcional de una ejecución exitosa (usa (.) sobre snd).
+-- Si hay mensaje, lo imprime
 printOutput :: (Database, Maybe String) -> IO Database
-printOutput p = (maybe (pure ()) putStrLn . snd) p >> pure (fst p)
+printOutput databaseAndMessage =
+  (maybe (pure ()) putStrLn . snd) databaseAndMessage
+    >> pure (fst databaseAndMessage)
 
 handleResult :: Either DbError (Database, Maybe String) -> IO (Maybe Database)
-handleResult = either (\e -> print e >> pure Nothing) (fmap Just . printOutput)
+handleResult =
+  either
+    (\dbError -> print dbError >> pure Nothing)
+    (fmap Just . printOutput)
+
+{-
+  Ejemplo de comandos para probar:
+
+  CREATE TABLE personas (nombre, edad)
+  INSERT INTO personas VALUES ("Javier", 20)
+  INSERT INTO personas VALUES ("Yodariz", 18)
+  INSERT INTO personas VALUES ("Fernando", 22)
+  SELECT * FROM personas
+  SELECT nombre FROM personas WHERE edad > 19
+  DELETE FROM personas WHERE nombre = "Yodariz"
+  SELECT * FROM personas
+  :q
+-}
 
 main :: IO ()
 main = loop emptyDatabase
   where
-    loop db = do
+    loop database = do
       putStr "SQL> "
-      line <- getLine
-      if line == ":q"
+      lineText <- getLine
+      if lineText == ":q"
         then putStrLn "Hablamo ahorita compai"
         else do
-          md <- handleResult (executeLine line db)
-          case md of
-            Nothing -> loop db
-            Just db' -> loop db'
+          maybeUpdatedDatabase <- handleResult (executeLine lineText database)
+          case maybeUpdatedDatabase of
+            Nothing -> loop database
+            Just updatedDatabase -> loop updatedDatabase
